@@ -12,6 +12,8 @@ class _TaskListScreenState extends State<TaskListScreen> {
   final _taskController = TextEditingController();
   String _selectedPriority = 'Medium';
   String _selectedSortOption = 'Priority';
+  String? _filterPriority;
+  bool? _filterCompletion;
 
   @override
   Widget build(BuildContext context) {
@@ -59,7 +61,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
             ],
           ),
           Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               Text("Sort by: "),
               DropdownButton<String>(
@@ -77,11 +79,36 @@ class _TaskListScreenState extends State<TaskListScreen> {
                   });
                 },
               ),
+              Text("Filter by Priority: "),
+              DropdownButton<String?>(
+                value: _filterPriority,
+                hint: Text('All'),
+                items: [null, 'High', 'Medium', 'Low'].map((String? value) {
+                  return DropdownMenuItem<String?>(
+                    value: value,
+                    child: Text(value ?? 'All'),
+                  );
+                }).toList(),
+                onChanged: (newFilter) {
+                  setState(() {
+                    _filterPriority = newFilter;
+                  });
+                },
+              ),
+              SwitchListTile(
+                title: Text("Completed Only"),
+                value: _filterCompletion == true,
+                onChanged: (value) {
+                  setState(() {
+                    _filterCompletion = value ? true : null;
+                  });
+                },
+              ),
             ],
           ),
           Expanded(
             child: StreamBuilder(
-              stream: _getSortedTasks(),
+              stream: _getFilteredTasks(),
               builder: (context, snapshot) {
                 if (!snapshot.hasData) {
                   return Center(child: CircularProgressIndicator());
@@ -137,27 +164,32 @@ class _TaskListScreenState extends State<TaskListScreen> {
     await _firestore.collection('tasks').doc(taskId).delete();
   }
 
-  Stream<QuerySnapshot> _getSortedTasks() {
+  Stream<QuerySnapshot> _getFilteredTasks() {
+    Query query = _firestore.collection('tasks');
+
+    // Apply priority filter if selected
+    if (_filterPriority != null) {
+      query = query.where('priority', isEqualTo: _filterPriority);
+    }
+
+    // Apply completion filter if selected
+    if (_filterCompletion != null) {
+      query = query.where('completed', isEqualTo: _filterCompletion);
+    }
+
+    // Apply sorting based on selected sort option
     switch (_selectedSortOption) {
       case 'Priority':
-        return _firestore
-            .collection('tasks')
-            .orderBy('priority',
-                descending: false) // Ensures High -> Medium -> Low
-            .snapshots();
+        query = query.orderBy('priority', descending: false);
+        break;
       case 'Due Date':
-        return _firestore
-            .collection('tasks')
-            .orderBy('dueDate') // Shows earliest created tasks first
-            .snapshots();
+        query = query.orderBy('dueDate');
+        break;
       case 'Completion Status':
-        return _firestore
-            .collection('tasks')
-            .orderBy('completed',
-                descending: true) // Shows completed tasks at the top
-            .snapshots();
-      default:
-        return _firestore.collection('tasks').snapshots();
+        query = query.orderBy('completed', descending: true);
+        break;
     }
+
+    return query.snapshots();
   }
 }
