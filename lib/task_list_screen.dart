@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'task.dart'; // Ensure the Task model is correctly defined in a separate file.
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class TaskListScreen extends StatefulWidget {
   @override
@@ -7,144 +8,156 @@ class TaskListScreen extends StatefulWidget {
 }
 
 class _TaskListScreenState extends State<TaskListScreen> {
-  List<Task> tasks = [];
-  final TextEditingController _taskNameController = TextEditingController();
-  String _selectedPriority = 'Low'; // Default priority
-
-  // Add a task to the list
-  void _addTask() {
-    final String taskName = _taskNameController.text;
-    if (taskName.isNotEmpty) {
-      setState(() {
-        tasks.add(Task(name: taskName, priority: _selectedPriority));
-        _taskNameController.clear();
-        _sortTasks(); // Sort tasks every time a new one is added
-      });
-    }
-  }
-
-  // Toggle task completion status
-  void _toggleTaskCompletion(int index) {
-    setState(() {
-      tasks[index].isCompleted = !tasks[index].isCompleted;
-    });
-  }
-
-  // Remove a task from the list
-  void _removeTask(int index) {
-    setState(() {
-      tasks.removeAt(index);
-    });
-  }
-
-  // Sort tasks by priority
-  void _sortTasks() {
-    tasks.sort((Task a, Task b) {
-      return _priorityValue(a.priority).compareTo(_priorityValue(b.priority));
-    });
-  }
-
-  // Helper function to convert priority to numerical value
-  int _priorityValue(String priority) {
-    switch (priority) {
-      case 'High':
-        return 1;
-      case 'Medium':
-        return 2;
-      case 'Low':
-        return 3;
-      default:
-        return 3;
-    }
-  }
-
-  // Function to count completed and incomplete tasks
-  Map<String, int> _countTasks() {
-    int completed = 0;
-    int incomplete = 0;
-    for (Task task in tasks) {
-      if (task.isCompleted) {
-        completed++;
-      } else {
-        incomplete++;
-      }
-    }
-    return {'completed': completed, 'incomplete': incomplete};
-  }
+  final _firestore = FirebaseFirestore.instance;
+  final _taskController = TextEditingController();
+  String _selectedPriority = 'Medium';
+  String _selectedSortOption = 'Priority';
 
   @override
   Widget build(BuildContext context) {
-    Map<String, int> taskCount =
-        _countTasks(); // Call this here to update each time the state changes
     return Scaffold(
       appBar: AppBar(
-        title: Text('Task Manager'),
+        title: Text('Task List'),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.logout),
+            onPressed: () async {
+              await FirebaseAuth.instance.signOut();
+              Navigator.of(context).pushReplacementNamed('/login');
+            },
+          ),
+        ],
       ),
       body: Column(
-        children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: TextField(
-              controller: _taskNameController,
-              decoration: InputDecoration(
-                labelText: 'Enter Task Name',
-                suffixIcon: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: _selectedPriority,
-                    onChanged: (String? newValue) {
-                      setState(() {
-                        _selectedPriority = newValue!;
-                      });
-                    },
-                    items: ['Low', 'Medium', 'High'].map((String value) {
-                      return DropdownMenuItem<String>(
-                        value: value,
-                        child: Text(value),
-                      );
-                    }).toList(),
-                  ),
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _taskController,
+                  decoration: InputDecoration(labelText: 'Enter task name'),
                 ),
               ),
-              onSubmitted: (_) =>
-                  _addTask(), // Add task when submitting the form
-            ),
+              DropdownButton<String>(
+                value: _selectedPriority,
+                items: ['High', 'Medium', 'Low'].map((String value) {
+                  return DropdownMenuItem<String>(
+                    value: value,
+                    child: Text(value),
+                  );
+                }).toList(),
+                onChanged: (newValue) {
+                  setState(() {
+                    _selectedPriority = newValue!;
+                  });
+                },
+              ),
+              ElevatedButton(
+                onPressed: addTask,
+                child: Text('Add Task'),
+              ),
+            ],
           ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Text(
-              'Completed: ${taskCount['completed']} Incomplete: ${taskCount['incomplete']}',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Text("Sort by: "),
+              DropdownButton<String>(
+                value: _selectedSortOption,
+                items: ['Priority', 'Due Date', 'Completion Status']
+                    .map((String option) {
+                  return DropdownMenuItem<String>(
+                    value: option,
+                    child: Text(option),
+                  );
+                }).toList(),
+                onChanged: (newSortOption) {
+                  setState(() {
+                    _selectedSortOption = newSortOption!;
+                  });
+                },
+              ),
+            ],
           ),
           Expanded(
-            child: ListView.builder(
-              itemCount: tasks.length,
-              itemBuilder: (context, index) {
-                final task = tasks[index];
-                return ListTile(
-                  title: Text(task.name),
-                  subtitle: Text('Priority: ${task.priority}'),
-                  leading: Checkbox(
-                    value: task.isCompleted,
-                    onChanged: (bool? value) {
-                      _toggleTaskCompletion(index);
-                    },
-                  ),
-                  trailing: IconButton(
-                    icon: Icon(Icons.delete),
-                    onPressed: () => _removeTask(index),
-                  ),
+            child: StreamBuilder(
+              stream: _getSortedTasks(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) {
+                  return Center(child: CircularProgressIndicator());
+                }
+                final tasks = snapshot.data!.docs;
+                return ListView.builder(
+                  itemCount: tasks.length,
+                  itemBuilder: (context, index) {
+                    var task = tasks[index];
+                    return ListTile(
+                      title: Text(task['name']),
+                      subtitle: Text('Priority: ${task['priority']}'),
+                      leading: Checkbox(
+                        value: task['completed'],
+                        onChanged: (value) {
+                          toggleCompletion(task.id, value);
+                        },
+                      ),
+                      trailing: IconButton(
+                        icon: Icon(Icons.delete),
+                        onPressed: () => deleteTask(task.id),
+                      ),
+                    );
+                  },
                 );
               },
             ),
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _addTask,
-        tooltip: 'Add Task',
-        child: Icon(Icons.add),
-      ),
     );
+  }
+
+  Future<void> addTask() async {
+    if (_taskController.text.isNotEmpty) {
+      await _firestore.collection('tasks').add({
+        'name': _taskController.text,
+        'completed': false,
+        'priority': _selectedPriority,
+        'dueDate': DateTime.now(),
+      });
+      _taskController.clear();
+    }
+  }
+
+  Future<void> toggleCompletion(String taskId, bool? isCompleted) async {
+    await _firestore.collection('tasks').doc(taskId).update({
+      'completed': isCompleted,
+    });
+  }
+
+  Future<void> deleteTask(String taskId) async {
+    await _firestore.collection('tasks').doc(taskId).delete();
+  }
+
+  Stream<QuerySnapshot> _getSortedTasks() {
+    switch (_selectedSortOption) {
+      case 'Priority':
+        return _firestore
+            .collection('tasks')
+            .orderBy('priority',
+                descending: false) // Ensures High -> Medium -> Low
+            .snapshots();
+      case 'Due Date':
+        return _firestore
+            .collection('tasks')
+            .orderBy('dueDate') // Shows earliest created tasks first
+            .snapshots();
+      case 'Completion Status':
+        return _firestore
+            .collection('tasks')
+            .orderBy('completed',
+                descending: true) // Shows completed tasks at the top
+            .snapshots();
+      default:
+        return _firestore.collection('tasks').snapshots();
+    }
   }
 }
