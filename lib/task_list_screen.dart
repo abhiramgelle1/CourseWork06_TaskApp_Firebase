@@ -11,9 +11,9 @@ class _TaskListScreenState extends State<TaskListScreen> {
   final _firestore = FirebaseFirestore.instance;
   final _taskController = TextEditingController();
   String _selectedPriority = 'Medium';
-  String _selectedSortOption = 'Priority';
+  String _sortOption = 'Priority';
   String? _filterPriority;
-  bool? _filterCompletion;
+  bool showOnlyCompleted = false;
 
   @override
   Widget build(BuildContext context) {
@@ -32,86 +32,105 @@ class _TaskListScreenState extends State<TaskListScreen> {
       ),
       body: Column(
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _taskController,
-                  decoration: InputDecoration(labelText: 'Enter task name'),
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _taskController,
+                    decoration: InputDecoration(
+                      labelText: 'Enter task name',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
                 ),
-              ),
-              DropdownButton<String>(
-                value: _selectedPriority,
-                items: ['High', 'Medium', 'Low'].map((String value) {
-                  return DropdownMenuItem<String>(
-                    value: value,
-                    child: Text(value),
-                  );
-                }).toList(),
-                onChanged: (newValue) {
-                  setState(() {
-                    _selectedPriority = newValue!;
-                  });
-                },
-              ),
-              ElevatedButton(
-                onPressed: addTask,
-                child: Text('Add Task'),
-              ),
-            ],
+                SizedBox(width: 10),
+                DropdownButton<String>(
+                  value: _selectedPriority,
+                  items: ['High', 'Medium', 'Low'].map((String value) {
+                    return DropdownMenuItem<String>(
+                      value: value,
+                      child: Text(value),
+                    );
+                  }).toList(),
+                  onChanged: (newValue) {
+                    setState(() {
+                      _selectedPriority = newValue!;
+                    });
+                  },
+                ),
+                IconButton(
+                  icon: Icon(Icons.add),
+                  onPressed: addTask,
+                ),
+              ],
+            ),
           ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              Text("Sort by: "),
-              DropdownButton<String>(
-                value: _selectedSortOption,
-                items: ['Priority', 'Due Date', 'Completion Status']
-                    .map((String option) {
-                  return DropdownMenuItem<String>(
-                    value: option,
-                    child: Text(option),
-                  );
-                }).toList(),
-                onChanged: (newSortOption) {
-                  setState(() {
-                    _selectedSortOption = newSortOption!;
-                  });
-                },
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8.0),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  DropdownButton<String>(
+                    value: _sortOption,
+                    items: ['Priority', 'Due Date', 'Completion Status']
+                        .map((String option) {
+                      return DropdownMenuItem<String>(
+                        value: option,
+                        child: Text("Sort by $option"),
+                      );
+                    }).toList(),
+                    onChanged: (newSortOption) {
+                      setState(() {
+                        _sortOption = newSortOption!;
+                      });
+                    },
+                  ),
+                  SizedBox(width: 10),
+                  DropdownButton<String?>(
+                    value: _filterPriority,
+                    hint: Text('Filter by Priority'),
+                    items: [null, 'High', 'Medium', 'Low'].map((String? value) {
+                      return DropdownMenuItem<String?>(
+                        value: value,
+                        child: Text(value ?? 'All'),
+                      );
+                    }).toList(),
+                    onChanged: (newFilter) {
+                      setState(() {
+                        _filterPriority = newFilter;
+                      });
+                    },
+                  ),
+                  SizedBox(width: 10),
+                  Row(
+                    children: [
+                      Text("Completed Only"),
+                      Switch(
+                        value: showOnlyCompleted,
+                        onChanged: (value) {
+                          setState(() {
+                            showOnlyCompleted = value;
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                ],
               ),
-              Text("Filter by Priority: "),
-              DropdownButton<String?>(
-                value: _filterPriority,
-                hint: Text('All'),
-                items: [null, 'High', 'Medium', 'Low'].map((String? value) {
-                  return DropdownMenuItem<String?>(
-                    value: value,
-                    child: Text(value ?? 'All'),
-                  );
-                }).toList(),
-                onChanged: (newFilter) {
-                  setState(() {
-                    _filterPriority = newFilter;
-                  });
-                },
-              ),
-              SwitchListTile(
-                title: Text("Completed Only"),
-                value: _filterCompletion == true,
-                onChanged: (value) {
-                  setState(() {
-                    _filterCompletion = value ? true : null;
-                  });
-                },
-              ),
-            ],
+            ),
           ),
           Expanded(
-            child: StreamBuilder(
-              stream: _getFilteredTasks(),
+            child: FutureBuilder<QuerySnapshot>(
+              future: _fetchTasks(),
               builder: (context, snapshot) {
-                if (!snapshot.hasData) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
                   return Center(child: CircularProgressIndicator());
+                }
+                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                  return Center(child: Text("No tasks available."));
                 }
                 final tasks = snapshot.data!.docs;
                 return ListView.builder(
@@ -120,9 +139,20 @@ class _TaskListScreenState extends State<TaskListScreen> {
                     var task = tasks[index];
                     return ListTile(
                       title: Text(task['name']),
-                      subtitle: Text('Priority: ${task['priority']}'),
+                      subtitle: Row(
+                        children: [
+                          Icon(
+                            Icons.circle,
+                            color: _getPriorityColor(task['priority']),
+                            size: 10,
+                          ),
+                          SizedBox(width: 5),
+                          Text('Priority: ${task['priority']}'),
+                        ],
+                      ),
                       leading: Checkbox(
                         value: task['completed'],
+                        activeColor: Colors.green,
                         onChanged: (value) {
                           toggleCompletion(task.id, value);
                         },
@@ -151,6 +181,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
         'dueDate': DateTime.now(),
       });
       _taskController.clear();
+      setState(() {}); // Refresh to show new task
     }
   }
 
@@ -158,27 +189,26 @@ class _TaskListScreenState extends State<TaskListScreen> {
     await _firestore.collection('tasks').doc(taskId).update({
       'completed': isCompleted,
     });
+    setState(() {});
   }
 
   Future<void> deleteTask(String taskId) async {
     await _firestore.collection('tasks').doc(taskId).delete();
+    setState(() {});
   }
 
-  Stream<QuerySnapshot> _getFilteredTasks() {
+  Future<QuerySnapshot> _fetchTasks() async {
     Query query = _firestore.collection('tasks');
 
-    // Apply priority filter if selected
     if (_filterPriority != null) {
       query = query.where('priority', isEqualTo: _filterPriority);
     }
 
-    // Apply completion filter if selected
-    if (_filterCompletion != null) {
-      query = query.where('completed', isEqualTo: _filterCompletion);
+    if (showOnlyCompleted) {
+      query = query.where('completed', isEqualTo: true);
     }
 
-    // Apply sorting based on selected sort option
-    switch (_selectedSortOption) {
+    switch (_sortOption) {
       case 'Priority':
         query = query.orderBy('priority', descending: false);
         break;
@@ -190,6 +220,19 @@ class _TaskListScreenState extends State<TaskListScreen> {
         break;
     }
 
-    return query.snapshots();
+    return query.get();
+  }
+
+  Color _getPriorityColor(String priority) {
+    switch (priority) {
+      case 'High':
+        return Colors.red;
+      case 'Medium':
+        return Colors.yellow;
+      case 'Low':
+        return Colors.green;
+      default:
+        return Colors.grey;
+    }
   }
 }
